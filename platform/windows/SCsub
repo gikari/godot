@@ -161,6 +161,44 @@ if env["d3d12"]:
         )
 
 if not env.msvc:
+    def deploy_mingw_dependencies(target, source, env):
+        import subprocess, shutil, glob
+        binary_dir = os.path.dirname(str(target[0].abspath))
+        mingw_bin_dir = ""
+        if "MINGW_PREFIX" in os.environ:
+            mingw_bin_dir = os.path.join(os.environ["MINGW_PREFIX"], "bin")
+        if not mingw_bin_dir or not os.path.isdir(mingw_bin_dir):
+            gxx_path = shutil.which("g++")
+            if gxx_path:
+                mingw_bin_dir = os.path.dirname(gxx_path)
+        
+        if not mingw_bin_dir or not os.path.isdir(mingw_bin_dir):
+            return
+
+        objdump_path = os.path.join(mingw_bin_dir, "objdump.exe")
+        if not os.path.isfile(objdump_path):
+            objdump_path = "objdump"
+            
+        binaries = glob.glob(os.path.join(binary_dir, "*.exe")) + glob.glob(os.path.join(binary_dir, "*.dll"))
+        for binary_path in binaries:
+            try:
+                res = subprocess.run([objdump_path, "-p", binary_path], capture_output=True, text=True)
+                if res.returncode == 0:
+                    for line in res.stdout.splitlines():
+                        if "DLL Name:" in line:
+                            dll_name = line.split("DLL Name:")[1].strip()
+                            dll_src = os.path.join(mingw_bin_dir, dll_name)
+                            if os.path.isfile(dll_src):
+                                dll_dst = os.path.join(binary_dir, dll_name)
+                                if not os.path.isfile(dll_dst):
+                                    shutil.copy2(dll_src, dll_dst)
+            except Exception:
+                pass
+
+    env.AddPostAction(prog, deploy_mingw_dependencies)
+    if env["windows_subsystem"] == "gui":
+        env.AddPostAction(prog_wrap, deploy_mingw_dependencies)
+
     if env["debug_symbols"]:
         env.AddPostAction(prog, env.Run(platform_windows_builders.make_debug_mingw))
         if env["windows_subsystem"] == "gui":

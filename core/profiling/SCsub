@@ -58,7 +58,7 @@ if env["profiler"]:
         env.Prepend(CPPPATH=[str(profiler_path.absolute())])
 
         env_tracy = env.Clone()
-        env_tracy.Append(CPPDEFINES=["TRACY_ENABLE"])
+        env_tracy.Append(CPPDEFINES=["TRACY_ENABLE", "TRACY_EXPORTS", "TRACY_DELAYED_INIT", "TRACY_MANUAL_LIFETIME"])
         if env["profiler_sample_callstack"]:
             if env["platform"] not in ("windows", "linuxbsd", "android"):
                 # Reference the feature matrix in the tracy documentation.
@@ -70,7 +70,24 @@ if env["profiler"]:
         if env["profiler_track_memory"]:
             env_tracy.Append(CPPDEFINES=["GODOT_PROFILER_TRACK_MEMORY"])
         env_tracy.disable_warnings()
-        env_tracy.add_source_files(env.core_sources, str((profiler_path / "TracyClient.cpp").absolute()))
+
+        if env["platform"] == "windows":
+            env_tracy.Append(LIBS=["ws2_32", "dbghelp"])
+
+            # Prevent duplicate static MinGW runtime copies clashing in the same process space
+            if not env.msvc:
+                for flag in ["-static", "-static-libgcc", "-static-libstdc++"]:
+                    if flag in env_tracy["LINKFLAGS"]:
+                        env_tracy["LINKFLAGS"].remove(flag)
+
+        tracy_dll = env_tracy.SharedLibrary("#bin/tracy", [str((profiler_path / "TracyClient.cpp").absolute())])
+
+        if env["platform"] == "windows":
+            env.Append(LIBS=[tracy_dll[1]])
+        else:
+            env.Append(LIBS=[tracy_dll[0]])
+
+        env.Append(CPPDEFINES=["TRACY_IMPORTS", "TRACY_DELAYED_INIT", "TRACY_MANUAL_LIFETIME"])
     elif env["profiler"] == "perfetto":
         if not env["profiler_path"]:
             print("profiler_path must be set when using the perfetto profiler. Aborting.")

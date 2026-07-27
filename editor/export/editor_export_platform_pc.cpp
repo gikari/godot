@@ -187,17 +187,114 @@ Error EditorExportPlatformPC::prepare_template(const Ref<EditorExportPreset> &p_
 	da->make_dir_recursive(p_path.get_base_dir());
 	Error err = da->copy(template_path, p_path, get_chmod_flags());
 	if (err == OK && copy_wrapper) {
-		for (int i = 0; wrapper_extensions[i]; ++i) {
-			const String wrapper_path = template_path.get_basename() + wrapper_extensions[i];
-			if (FileAccess::exists(wrapper_path)) {
-				err = da->copy(wrapper_path, p_path.get_basename() + ".console.exe", get_chmod_flags());
-				break;
+	        for (int i = 0; wrapper_extensions[i]; ++i) {
+	                const String wrapper_path = template_path.get_basename() + wrapper_extensions[i];
+	                if (FileAccess::exists(wrapper_path)) {
+	                        err = da->copy(wrapper_path, p_path.get_basename() + ".console.exe", get_chmod_flags());
+	                        break;
+	                }
+	        }
+	}
+
+#ifdef WINDOWS_ENABLED
+	// Copy runtime DLLs (e.g. MinGW libs) found next to the export template, recursively.
+	if (err == OK) {
+		static const char *const system_dll_prefixes[] = {
+			"advapi32", "api-ms-win-", "avrt",     "bcrypt",   "combase",
+			"crypt32",  "dbghelp",     "dwmapi",   "dwrite",   "gdi32",
+			"hid",      "imm32",       "iphlpapi", "kernel",   "msvcrt",
+			"ntdll",    "ole32",       "oleaut32", "shcore",   "shell32",
+			"shlwapi",  "ucrtbase",    "user32",   "winmm",    "ws2_32",
+			"wsock32",
+			nullptr,
+		};
+
+		String mingw_prefix = OS::get_singleton()->get_environment("MINGW_PREFIX");
+		String objdump_path = mingw_prefix.is_empty()
+				? String("objdump")
+				: mingw_prefix.path_join("bin").path_join("objdump.exe");
+
+		// Returns direct DLL dependencies of the given binary by parsing objdump output.
+		auto get_dll_deps = [&](const String &p_binary) -> Vector<String> {
+			List<String> args;
+			args.push_back("-p");
+			args.push_back(p_binary);
+
+			String output;
+			int exit_code = 0;
+			if (OS::get_singleton()->execute(objdump_path, args, &output, &exit_code, true) != OK || exit_code != 0) {
+				return {};
+			}
+
+			Vector<String> deps;
+			for (const String &raw_line : output.split("\n")) {
+				const String line = raw_line.strip_edges();
+				if (line.begins_with("DLL Name:")) {
+					deps.push_back(line.substr(String("DLL Name:").length()).strip_edges());
+				}
+			}
+			return deps;
+		};
+
+		HashSet<String> visited;
+		List<String> queue;
+
+		for (const String &dep : get_dll_deps(template_path)) {
+			queue.push_back(dep);
+		}
+
+		while (!queue.is_empty()) {
+			const String dll_name = queue.front()->get();
+			queue.pop_front();
+
+			if (visited.has(dll_name)) {
+				continue;
+			}
+			visited.insert(dll_name);
+
+			const String dll_lower = dll_name.to_lower();
+			bool is_system_dll = false;
+			for (int i = 0; system_dll_prefixes[i]; ++i) {
+				if (dll_lower.begins_with(system_dll_prefixes[i])) {
+					is_system_dll = true;
+					break;
+				}
+			}
+			if (is_system_dll) {
+				continue;
+			}
+
+			String dll_src = template_path.get_base_dir().path_join(dll_name);
+			if (!FileAccess::exists(dll_src) && !mingw_prefix.is_empty()) {
+				dll_src = mingw_prefix.path_join("bin").path_join(dll_name);
+			}
+
+			if (!FileAccess::exists(dll_src)) {
+				print_line(vformat("Export: Could not locate dependency DLL: %s", dll_name));
+				continue;
+			}
+
+			const String dll_dst = p_path.get_base_dir().path_join(dll_name);
+			if (!FileAccess::exists(dll_dst)) {
+				if (da->copy(dll_src, dll_dst) != OK) {
+					add_message(EXPORT_MESSAGE_WARNING, TTR("Prepare Template"), vformat(TTR("Failed to copy dependency DLL: %s"), dll_name));
+					continue;
+				}
+			}
+
+			// Recurse into the copied DLL's own dependencies.
+			for (const String &dep : get_dll_deps(dll_src)) {
+				if (!visited.has(dep)) {
+					queue.push_back(dep);
+				}
 			}
 		}
 	}
+#endif // WINDOWS_ENABLED
+
 	if (err != OK) {
-		add_message(EXPORT_MESSAGE_ERROR, TTR("Prepare Template"), TTR("Failed to copy export template."));
-		return err;
+	        add_message(EXPORT_MESSAGE_ERROR, TTR("Prepare Template"), TTR("Failed to copy export template."));
+	        return err;
 	}
 
 	return err;

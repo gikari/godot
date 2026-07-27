@@ -48,6 +48,9 @@
 #include "core/string/string_name.h"
 
 #define TRACY_ENABLE
+#ifndef TRACY_IMPORTS
+#define TRACY_IMPORTS
+#endif
 
 #include <tracy/Tracy.hpp>
 

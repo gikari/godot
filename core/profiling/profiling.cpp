@@ -167,6 +167,8 @@ void godot_init_profiler() {
 
 	tracy::configured = true;
 
+	tracy::StartupProfiler();
+
 	// Send our first event to tracy; otherwise it doesn't start collecting data.
 	// FrameMark is kind of fitting because it communicates "this is where we started tracing".
 	FrameMark;
@@ -192,6 +194,8 @@ void godot_cleanup_profiler() {
 	}
 
 	tracy::configured = false;
+
+	tracy::ShutdownProfiler();
 }
 
 #elif defined(GODOT_USE_PERFETTO)
